@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fatture in Cloud MCP Server - v1.1
+"""Fatture in Cloud MCP Server - v1.2
 
 MCP Server per integrare Fatture in Cloud con Claude AI.
 Permette di gestire fatture elettroniche italiane tramite conversazione.
 
 Author: Mediaform s.c.r.l. (https://media-form.it)
 License: MIT
+
 """
 
 import json
@@ -138,6 +139,7 @@ async def list_tools():
                 "properties": {
                     "source_document_id": {"type": "integer", "description": "ID fattura da duplicare"},
                     "new_date": {"type": "string", "description": "Nuova data YYYY-MM-DD (default: oggi)"},
+                    "payment_days": {"type": "integer", "description": "Giorni pagamento dalla data fattura (default: eredita da originale)"},
                     "description_replace": {
                         "type": "object",
                         "description": "Sostituzioni testo nella descrizione (es. 2025->2026)",
@@ -148,6 +150,17 @@ async def list_tools():
                     }
                 },
                 "required": ["source_document_id"]
+            }
+        ),
+        Tool(
+            name="delete_invoice",
+            description="Elimina una fattura BOZZA (non inviata). ATTENZIONE: Azione irreversibile! Chiedere SEMPRE conferma esplicita all'utente. Funziona solo su fatture non ancora inviate allo SDI.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "ID fattura da eliminare"}
+                },
+                "required": ["document_id"]
             }
         ),
         Tool(
@@ -414,6 +427,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             source_id = arguments["source_document_id"]
             new_date_str = arguments.get("new_date", datetime.now().strftime("%Y-%m-%d"))
             desc_replace = arguments.get("description_replace", {})
+            payment_days_override = arguments.get("payment_days")
             
             response = issued_api.get_issued_document(
                 company_id=COMPANY_ID,
@@ -445,8 +459,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 visible_subject = visible_subject.replace(desc_replace["old"], desc_replace["new"])
             
             invoice_date = datetime.strptime(new_date_str, "%Y-%m-%d")
-            orig_payments = orig.get("payments_list", [{}])
-            payment_days = orig_payments[0].get("payment_terms", {}).get("days", 30) if orig_payments else 30
+            
+            # Usa payment_days_override se fornito, altrimenti eredita dall'originale
+            if payment_days_override is not None:
+                payment_days = payment_days_override
+            else:
+                orig_payments = orig.get("payments_list", [{}])
+                payment_days = orig_payments[0].get("payment_terms", {}).get("days", 30) if orig_payments else 30
+            
             due_date = invoice_date + timedelta(days=payment_days)
             
             total_gross = sum(i["qty"] * i["net_price"] * (1 + i["vat"]["value"]/100) for i in items_list)
@@ -490,11 +510,46 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "id": d.get("id"),
                 "number": d.get("number"),
                 "date": str(d.get("date", "")),
+                "due_date": due_date.strftime("%Y-%m-%d"),
                 "client": client_data.get("name"),
                 "total": round(total_gross, 2),
                 "source_invoice": orig.get("number"),
                 "status": "bozza",
-                "message": f"Fattura #{d.get('number')} creata come bozza (duplicata da #{orig.get('number')}). Usa send_to_sdi per inviarla."
+                "message": f"Fattura #{d.get('number')} creata come bozza (duplicata da #{orig.get('number')}). Scadenza: {due_date.strftime('%d/%m/%Y')}. Usa send_to_sdi per inviarla."
+            }
+            return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+        
+        elif name == "delete_invoice":
+            doc_id = arguments["document_id"]
+            
+            # Prima verifica che la fattura esista e sia una bozza
+            check = issued_api.get_issued_document(
+                company_id=COMPANY_ID,
+                document_id=doc_id,
+                fieldset="detailed"
+            )
+            check_data = check.data.to_dict()
+            current_status = check_data.get("ei_status")
+            
+            # Permetti eliminazione solo se non inviata
+            if current_status and current_status not in ["null", "not_sent", None]:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": f"Impossibile eliminare: fattura già inviata allo SDI. Stato attuale: {current_status}"
+                }, indent=2, ensure_ascii=False))]
+            
+            # Elimina la fattura
+            issued_api.delete_issued_document(
+                company_id=COMPANY_ID,
+                document_id=doc_id
+            )
+            
+            result = {
+                "success": True,
+                "document_id": doc_id,
+                "number": check_data.get("number"),
+                "client": check_data.get("entity", {}).get("name"),
+                "message": f"Fattura #{check_data.get('number')} eliminata con successo."
             }
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
         
