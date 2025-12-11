@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.aringad/fattureincloud-mcp",
+  "description": "MCP Server for Fatture in Cloud API - Italian electronic invoicing management with Claude AI. Create, duplicate, send invoices to SDI, manage clients, track payments.",
+  "version": "1.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aringad/fattureincloud-mcp"
+  },
+  "packages": [
+    {
+      "registry_type": "pypi",
+      "identifier": "fattureincloud-mcp",
+      "version": "1.1.0"
+    }
+  ]
+}
