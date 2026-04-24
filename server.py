@@ -198,7 +198,7 @@ async def list_tools():
                     "month": {"type": "integer", "description": "Mese 1-12 (opzionale)"},
                     "query": {"type": "string", "description": "Filtro testuale (opzionale)"},
                     "type": {"type": "string", "description": "Tipo documento: invoice (default), credit_note, proforma"},
-                    "page": {"type": "integer", "description": "Pagina (default 1, max 100 risultati per pagina)"},
+                    "page": {"type": "integer", "description": "Pagina (default 1)"},
                     "per_page": {"type": "integer", "description": "Risultati per pagina, max 100 (default 100)"}
                 },
                 "required": ["year"]
