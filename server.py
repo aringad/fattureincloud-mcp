@@ -190,14 +190,16 @@ async def list_tools():
     return [
         Tool(
             name="list_invoices",
-            description="Lista documenti emessi. Parametri: year (int), month (int opzionale), query (str opzionale), type (str opzionale: invoice, credit_note, proforma — default: invoice)",
+            description="Lista documenti emessi. Parametri: year (int), month (int opzionale), query (str opzionale), type (str opzionale: invoice, credit_note, proforma — default: invoice). Usa page+per_page per scorrere risultati (max 100 per pagina).",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "year": {"type": "integer", "description": "Anno (es. 2024)"},
                     "month": {"type": "integer", "description": "Mese 1-12 (opzionale)"},
                     "query": {"type": "string", "description": "Filtro testuale (opzionale)"},
-                    "type": {"type": "string", "description": "Tipo documento: invoice (default), credit_note, proforma"}
+                    "type": {"type": "string", "description": "Tipo documento: invoice (default), credit_note, proforma"},
+                    "page": {"type": "integer", "description": "Pagina (default 1, max 100 risultati per pagina)"},
+                    "per_page": {"type": "integer", "description": "Risultati per pagina, max 100 (default 100)"}
                 },
                 "required": ["year"]
             }
@@ -476,6 +478,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             month = arguments.get("month")
             query = arguments.get("query")
             doc_type = arguments.get("type", "invoice")
+            page = arguments.get("page", 1)
+            per_page = min(int(arguments.get("per_page", 100)), 100)
 
             q = f"date >= '{year}-01-01' and date <= '{year}-12-31'"
             if month:
@@ -483,7 +487,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 q = f"date >= '{year}-{month:02d}-01' and date <= '{year}-{month:02d}-{last_day}'"
 
             response = issued_api.list_issued_documents(
-                company_id=COMPANY_ID, type=doc_type, q=q, per_page=100, fieldset="detailed"
+                company_id=COMPANY_ID, type=doc_type, q=q, per_page=per_page, page=page, fieldset="detailed"
             )
             invoices = []
             for doc in (response.data or []):
@@ -1059,17 +1063,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             client_filter = (arguments.get("client_name") or "").lower().strip()
             q = f"date >= '{year}-01-01' and date <= '{year}-12-31'"
 
-            emesse_resp = issued_api.list_issued_documents(
-                company_id=COMPANY_ID, type="invoice", q=q, per_page=100, fieldset="detailed"
-            )
-            ndc_resp = issued_api.list_issued_documents(
-                company_id=COMPANY_ID, type="credit_note", q=q, per_page=100, fieldset="detailed"
-            )
+            def fetch_all_docs(doc_type):
+                all_docs = []
+                page = 1
+                while True:
+                    resp = issued_api.list_issued_documents(
+                        company_id=COMPANY_ID, type=doc_type, q=q, per_page=100, page=page, fieldset="detailed"
+                    )
+                    batch = resp.data or []
+                    all_docs.extend(batch)
+                    if len(batch) < 100:
+                        break
+                    page += 1
+                return all_docs
 
             totale_fatturato = totale_incassato = totale_ndc = 0
             fatture_non_pagate = []
 
-            for doc in (emesse_resp.data or []):
+            for doc in fetch_all_docs("invoice"):
                 d = doc.to_dict()
                 client_name = d.get('entity', {}).get('name', '') if d.get('entity') else ''
                 if client_filter and client_filter not in client_name.lower():
@@ -1087,7 +1098,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                             "due_date": str(p.get('due_date', ''))
                         })
 
-            for doc in (ndc_resp.data or []):
+            for doc in fetch_all_docs("credit_note"):
                 d = doc.to_dict()
                 client_name = d.get('entity', {}).get('name', '') if d.get('entity') else ''
                 if client_filter and client_filter not in client_name.lower():
@@ -1098,12 +1109,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             totale_costi = 0
             if not client_filter:
-                ricevute_resp = received_api.list_received_documents(
-                    company_id=COMPANY_ID, type="expense", q=q, per_page=100, fieldset="detailed"
-                )
+                all_expenses = []
+                exp_page = 1
+                while True:
+                    ricevute_resp = received_api.list_received_documents(
+                        company_id=COMPANY_ID, type="expense", q=q, per_page=100, page=exp_page, fieldset="detailed"
+                    )
+                    batch = ricevute_resp.data or []
+                    all_expenses.extend(batch)
+                    if len(batch) < 100:
+                        break
+                    exp_page += 1
                 totale_costi = sum(
                     d.to_dict().get('amount_gross') or d.to_dict().get('amount_net') or 0
-                    for d in (ricevute_resp.data or [])
+                    for d in all_expenses
                 )
 
             fatture_non_pagate.sort(key=lambda x: x.get('due_date', ''))
