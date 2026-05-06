@@ -27,6 +27,9 @@ from mcp.types import Tool, TextContent
 ACCESS_TOKEN = os.getenv("FIC_ACCESS_TOKEN", "")
 COMPANY_ID = int(os.getenv("FIC_COMPANY_ID", "0"))
 SENDER_EMAIL = os.getenv("FIC_SENDER_EMAIL", "")
+# When false, get_situation omits incasso-based fields (incassato, da_incassare,
+# margine_lordo, prossime_scadenze) because payment status is not maintained in FIC.
+INCASSO_RELIABLE = os.getenv("FIC_INCASSO_RELIABLE", "1") == "1"
 
 configuration = fic.Configuration()
 configuration.access_token = ACCESS_TOKEN
@@ -447,7 +450,7 @@ async def list_tools():
         ),
         Tool(
             name="get_situation",
-            description="Dashboard anno: fatturato netto (fatture - NDC), incassato, da incassare, costi, margine. Supporta filtro per cliente.",
+            description="Dashboard anno: fatturato lordo (fatture emesse), note di credito, fatturato netto. Costi e margine inclusi se FIC_INCASSO_RELIABLE=1. Supporta filtro per cliente.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1086,17 +1089,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 if client_filter and client_filter not in client_name.lower():
                     continue
                 totale_fatturato += get_total_from_doc(d)
-                for p in d.get('payments_list', []):
-                    status = str(p.get('status', '')).replace('IssuedDocumentStatus.', '')
-                    if status == 'paid':
-                        totale_incassato += p.get('amount', 0)
-                    elif status == 'not_paid':
-                        fatture_non_pagate.append({
-                            "number": d.get("number"),
-                            "client": client_name,
-                            "amount": p.get('amount', 0),
-                            "due_date": str(p.get('due_date', ''))
-                        })
+                if INCASSO_RELIABLE:
+                    for p in d.get('payments_list', []):
+                        status = str(p.get('status', '')).replace('IssuedDocumentStatus.', '')
+                        if status == 'paid':
+                            totale_incassato += p.get('amount', 0)
+                        elif status == 'not_paid':
+                            fatture_non_pagate.append({
+                                "number": d.get("number"),
+                                "client": client_name,
+                                "amount": p.get('amount', 0),
+                                "due_date": str(p.get('due_date', ''))
+                            })
 
             for doc in fetch_all_docs("credit_note"):
                 d = doc.to_dict()
@@ -1125,19 +1129,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     for d in all_expenses
                 )
 
-            fatture_non_pagate.sort(key=lambda x: x.get('due_date', ''))
             result = {
                 "anno": year,
                 "filtro_cliente": client_filter or None,
                 "fatturato_lordo": round(totale_fatturato, 2),
                 "note_credito": round(totale_ndc, 2),
                 "fatturato_netto": round(fatturato_netto, 2),
-                "incassato": round(totale_incassato, 2),
-                "da_incassare": round(fatturato_netto - totale_incassato, 2),
                 "costi_totali": round(totale_costi, 2) if not client_filter else "N/A (filtro cliente attivo)",
-                "margine_lordo": round(fatturato_netto - totale_costi, 2) if not client_filter else "N/A",
-                "prossime_scadenze": fatture_non_pagate[:10]
             }
+            if INCASSO_RELIABLE:
+                fatture_non_pagate.sort(key=lambda x: x.get('due_date', ''))
+                result["incassato"] = round(totale_incassato, 2)
+                result["da_incassare"] = round(fatturato_netto - totale_incassato, 2)
+                result["margine_lordo"] = round(fatturato_netto - totale_costi, 2) if not client_filter else "N/A"
+                result["prossime_scadenze"] = fatture_non_pagate[:10]
+            else:
+                result["_nota"] = (
+                    "Campi incasso (incassato, da_incassare, margine_lordo, prossime_scadenze) "
+                    "omessi: FIC_INCASSO_RELIABLE=0. I pagamenti non sono aggiornati in FIC. "
+                    "Il fatturato_netto rappresenta solo i documenti emessi, non l'MRR reale."
+                )
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
         elif name == "check_numeration":
