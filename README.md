@@ -3,8 +3,11 @@
 [![PyPI](https://img.shields.io/pypi/v/fattureincloud-mcp)](https://pypi.org/project/fattureincloud-mcp/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MCPB](https://img.shields.io/badge/MCPB-compatible-blue)](https://github.com/modelcontextprotocol/mcpb)
+[![Listed in italia-mcp-servers](https://img.shields.io/badge/listed%20in-italia--mcp--servers-blue)](https://github.com/bsab/italia-mcp-servers)
 
 <!-- mcp-name: io.github.aringad/fattureincloud-mcp -->
+
+by **[Mediaform s.c.r.l.](https://media-form.it)** — Genova, Italy
 
 MCP server that connects Claude (Desktop, Code, or any MCP client) to **FattureInCloud**, the leading Italian SaaS for electronic invoicing. Manage invoices, credit notes, proformas, clients, suppliers, cost/revenue centers, and supplier expenses through natural language. Italy mandates B2B/B2C e-invoicing through the Sistema di Interscambio (SDI) — this server brings AI-assisted billing to that compliance-driven workflow.
 
