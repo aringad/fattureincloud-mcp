@@ -305,6 +305,18 @@ async def list_tools():
             annotations=_ann(read_only=True, idempotent=True),
         ),
         Tool(
+            name="get_client",
+            description="Dettaglio anagrafica di un cliente: indirizzo, PEC, telefono, codice SDI",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "client_id": {"type": "integer", "description": "ID cliente"}
+                },
+                "required": ["client_id"]
+            },
+            annotations=_ann(read_only=True, idempotent=True),
+        ),
+        Tool(
             name="get_company_info",
             description="Info azienda collegata",
             inputSchema={"type": "object", "properties": {}},
@@ -715,6 +727,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     continue
                 clients.append(client)
             return [TextContent(type="text", text=json.dumps(clients, indent=2, ensure_ascii=False))]
+
+        elif name == "get_client":
+            cd = get_client_by_id(arguments["client_id"])
+            if cd is None:
+                return [TextContent(type="text", text=json.dumps({"error": "Cliente non trovato"}, ensure_ascii=False))]
+            fields = ["id", "code", "name", "type", "first_name", "last_name",
+                      "vat_number", "tax_code", "address_street", "address_postal_code",
+                      "address_city", "address_province", "address_extra", "country",
+                      "email", "certified_email", "phone", "ei_code"]
+            client = {k: cd.get(k) for k in fields if cd.get(k) not in (None, "")}
+            return [TextContent(type="text", text=json.dumps(client, indent=2, ensure_ascii=False, default=str))]
 
         elif name == "get_company_info":
             response = companies_api.get_company_info(company_id=COMPANY_ID)
