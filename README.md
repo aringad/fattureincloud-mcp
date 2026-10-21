@@ -13,7 +13,7 @@ MCP server that connects Claude (Desktop, Code, or any MCP client) to **FattureI
 
 > ⚠️ **Unofficial integration.** Not affiliated with, endorsed by, or sponsored by TeamSystem S.p.A., owner of the FattureInCloud trademark. The trademark is used here for descriptive purposes only.
 
-## Features (23 tools)
+## Features (24 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -21,6 +21,7 @@ MCP server that connects Claude (Desktop, Code, or any MCP client) to **FattureI
 | `get_invoice` | Full document detail by ID |
 | `get_pdf_url` | PDF URL and web link for a document |
 | `list_clients` | List clients with optional filter |
+| `get_client` | Full client registry detail by ID (address, PEC, phone, SDI code) |
 | `get_company_info` | Connected company info |
 | `create_client` | Create a new client |
 | `update_client` | Update an existing client |
