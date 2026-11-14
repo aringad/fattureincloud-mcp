@@ -6,12 +6,12 @@
     "url": "https://github.com/aringad/fattureincloud-mcp",
     "source": "github"
   },
-  "version": "1.2.0",
+  "version": "2.1.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "fattureincloud-mcp",
-      "version": "1.2.0",
+      "version": "2.1.0",
       "transport": {
         "type": "stdio"
       },
