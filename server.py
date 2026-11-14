@@ -244,12 +244,18 @@ def build_issued_document(doc_type, client_id, items_data, date_str, payment_day
     return result, None
 
 
-@cache.cached("payment_accounts", ttl=timedelta(hours=24))
 def fetch_payment_accounts(*, company_id):
     """Payment accounts (FIC `/info/payment_accounts`), cioe' i conti di
     saldo. L'API li espone come InfoApi.list_payment_accounts: non esiste
     una classe PaymentAccountsApi nell'SDK, e questo e' il punto in cui la
-    v1.7.x era rimasta bloccata."""
+    v1.7.x era rimasta bloccata.
+
+    Non viene cachata, a differenza di anagrafica e centri: i conti si
+    leggono solo quando si elencano o quando si risolve il conto di un
+    incasso, e con la cache un conto appena creato resterebbe invisibile
+    per 24 ore — peggio, mark_payment_paid potrebbe scegliere il conto
+    sbagliato."""
+
     try:
         response = info_api.list_payment_accounts(company_id=company_id)
         accounts = []

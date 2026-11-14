@@ -78,7 +78,10 @@ def test_fetch_payment_accounts_returns_accounts(server_module):
     assert result[0]["type"] == "STANDARD"
 
 
-def test_fetch_payment_accounts_caches_repeated_calls(server_module):
+def test_fetch_payment_accounts_is_never_cached(server_module):
+    """The payment accounts are NOT cached: an account created a minute ago
+    must be visible right away, and mark_payment_paid must not resolve the
+    wrong cash account out of a stale list."""
     server = server_module
     response = _mock_accounts([])
 
@@ -86,7 +89,7 @@ def test_fetch_payment_accounts_caches_repeated_calls(server_module):
         for _ in range(5):
             server.fetch_payment_accounts(company_id=100)
 
-    assert m.call_count == 1
+    assert m.call_count == 5
 
 
 def test_fetch_payment_accounts_handles_exception(server_module):
