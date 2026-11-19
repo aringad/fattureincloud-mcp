@@ -72,6 +72,7 @@
     {"name": "get_invoice", "description": "Get full detail of a single document by ID (invoice, credit note, or proforma)."},
     {"name": "get_pdf_url", "description": "Return the PDF URL and the FattureInCloud web link for a document."},
     {"name": "list_clients", "description": "List clients with optional name / VAT filter."},
+    {"name": "get_client", "description": "Get full client registry detail by ID: address, PEC, phone, SDI code."},
     {"name": "get_company_info", "description": "Get info about the connected FattureInCloud company."},
     {"name": "create_client", "description": "Create a new client in the registry."},
     {"name": "update_client", "description": "Update an existing client. Only the fields passed are modified."},
