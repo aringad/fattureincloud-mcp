@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fatture in Cloud MCP Server - v2.0.0
+"""Fatture in Cloud MCP Server - v2.1.0
 
 MCP Server per integrare Fatture in Cloud con Claude AI.
 Permette di gestire fatture elettroniche italiane tramite conversazione.
@@ -216,7 +216,12 @@ def build_issued_document(doc_type, client_id, items_data, date_str, payment_day
 
     response = issued_api.create_issued_document(
         company_id=COMPANY_ID,
-        create_issued_document_request={"data": body_data}
+        # fix_payments: FIC allinea l'importo dell'ultima scadenza al totale
+        # effettivo del documento. Serve quando l'azienda ha cassa o ritenuta
+        # d'acconto: il totale calcolato da noi (netto + IVA) non coincide con
+        # il dovuto, e senza questo flag la creazione viene rifiutata con
+        # "Il totale dei pagamenti non corrisponde al totale da pagare".
+        create_issued_document_request={"data": body_data, "options": {"fix_payments": True}}
     )
     d = response.data.to_dict()
 
@@ -239,6 +244,138 @@ def build_issued_document(doc_type, client_id, items_data, date_str, payment_day
     return result, None
 
 
+def fetch_payment_accounts(*, company_id):
+    """Payment accounts (FIC `/info/payment_accounts`), cioe' i conti di
+    saldo. L'API li espone come InfoApi.list_payment_accounts: non esiste
+    una classe PaymentAccountsApi nell'SDK, e questo e' il punto in cui la
+    v1.7.x era rimasta bloccata.
+
+    Non viene cachata, a differenza di anagrafica e centri: i conti si
+    leggono solo quando si elencano o quando si risolve il conto di un
+    incasso, e con la cache un conto appena creato resterebbe invisibile
+    per 24 ore — peggio, mark_payment_paid potrebbe scegliere il conto
+    sbagliato."""
+
+    try:
+        response = info_api.list_payment_accounts(company_id=company_id)
+        accounts = []
+        for a in (response.data or []):
+            # response.data e' una lista di modelli pydantic: va convertito
+            # in dict prima di leggerne i campi.
+            data = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+            accounts.append({
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "type": str(data.get("type", "")).replace("PaymentAccountType.", ""),
+                "iban": data.get("iban"),
+                "description": data.get("description"),
+                "is_archived": data.get("is_archived"),
+            })
+        return accounts
+    except Exception:
+        return []
+
+
+def sanitize_payment(p):
+    """Restituisce un dict pulito del pagamento, gestendo oggetti annidati."""
+    result = {}
+    for k, v in p.items():
+        if v is None:
+            continue
+        if k == "payment_account":
+            if hasattr(v, 'to_dict'):
+                v = v.to_dict()
+            if isinstance(v, dict) and v.get("id"):
+                result[k] = {"id": v["id"]}
+            continue
+        if k == "payment_terms":
+            if hasattr(v, 'to_dict'):
+                v = v.to_dict()
+            if isinstance(v, dict):
+                result[k] = v
+            continue
+        if k == "status":
+            # l'SDK accetta solo i valori wire minuscoli ('not_paid', 'paid',
+            # 'reversed'): la risposta arriva come enum e str() la rende
+            # 'IssuedDocumentStatus.NOT_PAID'.
+            result[k] = str(v).replace("IssuedDocumentStatus.", "").lower()
+            continue
+        if hasattr(v, 'strftime'):
+            result[k] = str(v)
+            continue
+        result[k] = v
+    return result
+
+
+def summarize_payments(d):
+    """Stato di pagamento di un documento, pronto per list_invoices."""
+    summary = []
+    for p in (d.get("payments_list") or []):
+        pa = p.get("payment_account")
+        if hasattr(pa, 'to_dict'):
+            pa = pa.to_dict()
+        status = str(p.get("status", "")).replace("IssuedDocumentStatus.", "").lower()
+        summary.append({
+            "amount": p.get("amount"),
+            "due_date": str(p.get("due_date", "")) or None,
+            "status": status,
+            "paid_date": str(p.get("paid_date", "")) if p.get("paid_date") else None,
+            "payment_account_id": pa.get("id") if isinstance(pa, dict) else None
+        })
+    return summary
+
+
+def payment_overview(d):
+    """Stato complessivo dei pagamenti di un documento."""
+    payments = summarize_payments(d)
+    if not payments:
+        return {"status": None, "paid": None, "due_date": None, "outstanding": 0}
+    paid = [p for p in payments if p["status"] == "paid"]
+    unpaid = [p for p in payments if p["status"] != "paid"]
+    if paid and unpaid:
+        status = "partially_paid"
+    elif paid:
+        status = "paid"
+    else:
+        status = "not_paid"
+    outstanding = sum(p["amount"] or 0 for p in unpaid)
+    due_dates = [p["due_date"] for p in payments if p["due_date"]]
+    return {
+        "status": status,
+        "paid": status == "paid",
+        "due_date": min(due_dates) if due_dates else None,
+        "outstanding": round(outstanding, 2)
+    }
+
+
+def build_modify_body(orig, payments_list):
+    """Body per modify_issued_document a partire dal documento originale.
+
+    Si riprendono i campi scrivibili del documento (id, number, updated_at,
+    locked, ... sono read-only) e si sostituisce la payments_list.
+    """
+    body_data = {
+        "type": orig.get("type"),
+        "entity": orig.get("entity"),
+        "date": str(orig.get("date", ""))[:10],
+        "visible_subject": orig.get("visible_subject", ""),
+        "items_list": orig.get("items_list", []),
+        "payments_list": payments_list
+    }
+    for key in ("subject", "notes", "currency", "language", "payment_method",
+                "rc_center", "template", "denomination", "extra_data",
+                "use_gross_prices", "use_split_payment"):
+        if orig.get(key) is not None:
+            body_data[key] = orig[key]
+    if orig.get("type") in ("invoice", "credit_note"):
+        body_data["e_invoice"] = True
+        body_data["ei_data"] = orig.get("ei_data") or {"payment_method": "MP05"}
+    if orig.get("original_document"):
+        body_data["original_document"] = orig["original_document"]
+    return body_data
+
+
+
 @app.list_tools()
 async def list_tools():
     item_schema = {
@@ -256,14 +393,14 @@ async def list_tools():
     return [
         Tool(
             name="list_invoices",
-            description="Lista documenti emessi. Parametri: year (int), month (int opzionale), query (str opzionale), type (str opzionale: invoice, credit_note, proforma — default: invoice)",
+            description="Lista documenti emessi. Parametri: year (int), month (int opzionale), query (str opzionale), type (str opzionale: invoice, credit_note, proforma, self_supplier_invoice — default: invoice). Usa self_supplier_invoice per le autofatture.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "year": {"type": "integer", "description": "Anno (es. 2024)"},
                     "month": {"type": "integer", "description": "Mese 1-12 (opzionale)"},
                     "query": {"type": "string", "description": "Filtro testuale (opzionale)"},
-                    "type": {"type": "string", "description": "Tipo documento: invoice (default), credit_note, proforma"}
+                    "type": {"type": "string", "description": "Tipo documento: invoice (default), credit_note, proforma, self_supplier_invoice (autofattura)"}
                 },
                 "required": ["year"]
             },
@@ -546,6 +683,40 @@ async def list_tools():
             annotations=_ann(read_only=True, idempotent=True),
         ),
         Tool(
+            name="list_payment_accounts",
+            description="Lista i conti di saldo (cassa/banca) configurati in FattureInCloud, con id, nome e tipo. Serve a scegliere il conto di incasso per mark_payment_paid. Read-only.",
+            inputSchema={"type": "object", "properties": {}},
+            annotations=_ann(read_only=True, idempotent=True),
+        ),
+        Tool(
+            name="mark_payment_paid",
+            description="Segna una scadenza di pagamento come incassata, con data di incasso e conto di saldo. Funziona anche su documenti gia' emessi e inviati allo SDI: l'API accetta la modifica dello stato di pagamento senza sbloccare il documento. Se payment_account_id non e' indicato usa il conto gia' presente sulla scadenza, altrimenti il primo disponibile. Cambia dati contabili reali: chiedere sempre conferma.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "ID documento"},
+                    "payment_index": {"type": "integer", "description": "Indice della scadenza (default 0, la prima)"},
+                    "paid_date": {"type": "string", "description": "Data incasso YYYY-MM-DD (default oggi)"},
+                    "payment_account_id": {"type": "integer", "description": "ID del conto di saldo (opzionale, vedi list_payment_accounts)"}
+                },
+                "required": ["document_id"]
+            },
+            annotations=_ann(),
+        ),
+        Tool(
+            name="mark_payment_unpaid",
+            description="Riporta una scadenza di pagamento a non pagato, annullando l'incasso registrato. Cambia dati contabili reali: chiedere sempre conferma.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "ID documento"},
+                    "payment_index": {"type": "integer", "description": "Indice della scadenza (default 0, la prima)"}
+                },
+                "required": ["document_id"]
+            },
+            annotations=_ann(destructive=True),
+        ),
+        Tool(
             name="check_numeration",
             description="Verifica continuità numerica delle fatture emesse per un dato anno.",
             inputSchema={
@@ -629,12 +800,141 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 }
                 if d.get("rc_center"):
                     inv["revenue_center"] = d["rc_center"]
+                inv.update(payment_overview(d))
                 if query:
                     search_text = f"{inv['client']} {inv['subject']} {inv['description']}".lower()
                     if query.lower() not in search_text:
                         continue
                 invoices.append(inv)
             return [TextContent(type="text", text=json.dumps(invoices, indent=2, ensure_ascii=False))]
+
+        elif name == "list_payment_accounts":
+            accounts = fetch_payment_accounts(company_id=COMPANY_ID)
+            return [TextContent(type="text", text=json.dumps({
+                "count": len(accounts),
+                "payment_accounts": accounts
+            }, indent=2, ensure_ascii=False))]
+
+        elif name == "mark_payment_paid":
+            doc_id = arguments["document_id"]
+            payment_index = arguments.get("payment_index", 0)
+            paid_date = arguments.get("paid_date") or datetime.now().strftime("%Y-%m-%d")
+
+            response = issued_api.get_issued_document(
+                company_id=COMPANY_ID, document_id=doc_id, fieldset="detailed"
+            )
+            orig = response.data.to_dict()
+
+            payments = orig.get("payments_list") or []
+            if payment_index >= len(payments):
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": f"Scadenza {payment_index} non trovata. Il documento ha {len(payments)} scadenze (indici 0-{len(payments)-1})."
+                }, ensure_ascii=False))]
+
+            # il conto di saldo: quello richiesto, altrimenti quello gia'
+            # presente sulla scadenza, altrimenti il primo disponibile
+            account_id = arguments.get("payment_account_id")
+            if not account_id:
+                existing = payments[payment_index].get("payment_account")
+                if hasattr(existing, 'to_dict'):
+                    existing = existing.to_dict()
+                if isinstance(existing, dict):
+                    account_id = existing.get("id")
+            accounts = fetch_payment_accounts(company_id=COMPANY_ID)
+            if not account_id and accounts:
+                account_id = accounts[0].get("id")
+            if not account_id:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": "Nessun conto di pagamento trovato. Configura un conto in FattureInCloud, oppure indica payment_account_id."
+                }, ensure_ascii=False))]
+
+            new_payments = []
+            for i, p in enumerate(payments):
+                p_clean = sanitize_payment(p)
+                if i == payment_index:
+                    p_clean["status"] = "paid"
+                    p_clean["paid_date"] = paid_date
+                    p_clean["payment_account"] = {"id": account_id}
+                new_payments.append(p_clean)
+
+            body_data = build_modify_body(orig, new_payments)
+            try:
+                issued_api.modify_issued_document(
+                    company_id=COMPANY_ID,
+                    document_id=doc_id,
+                    modify_issued_document_request={"data": body_data}
+                )
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": str(e)
+                }, indent=2, ensure_ascii=False))]
+
+            result = {
+                "success": True,
+                "document_id": doc_id,
+                "number": orig.get("number"),
+                "date": str(orig.get("date", ""))[:10],
+                "client": orig.get("entity", {}).get("name") if orig.get("entity") else None,
+                "payment_index": payment_index,
+                "amount": payments[payment_index].get("amount"),
+                "status": "paid",
+                "paid_date": paid_date,
+                "payment_account_id": account_id,
+                "message": f"Scadenza #{payment_index} di fattura #{orig.get('number')} segnata come incassata in data {paid_date}."
+            }
+            return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
+        elif name == "mark_payment_unpaid":
+            doc_id = arguments["document_id"]
+            payment_index = arguments.get("payment_index", 0)
+
+            response = issued_api.get_issued_document(
+                company_id=COMPANY_ID, document_id=doc_id, fieldset="detailed"
+            )
+            orig = response.data.to_dict()
+
+            payments = orig.get("payments_list") or []
+            if payment_index >= len(payments):
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": f"Scadenza {payment_index} non trovata. Il documento ha {len(payments)} scadenze (indici 0-{len(payments)-1})."
+                }, ensure_ascii=False))]
+
+            new_payments = []
+            for i, p in enumerate(payments):
+                p_clean = sanitize_payment(p)
+                if i == payment_index:
+                    p_clean["status"] = "not_paid"
+                    p_clean.pop("paid_date", None)
+                    p_clean.pop("payment_account", None)
+                new_payments.append(p_clean)
+
+            body_data = build_modify_body(orig, new_payments)
+            try:
+                issued_api.modify_issued_document(
+                    company_id=COMPANY_ID,
+                    document_id=doc_id,
+                    modify_issued_document_request={"data": body_data}
+                )
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": str(e)
+                }, indent=2, ensure_ascii=False))]
+
+            result = {
+                "success": True,
+                "document_id": doc_id,
+                "number": orig.get("number"),
+                "payment_index": payment_index,
+                "amount": payments[payment_index].get("amount"),
+                "status": "not_paid",
+                "message": f"Scadenza #{payment_index} di fattura #{orig.get('number')} riportata a non pagata."
+            }
+            return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
         elif name == "get_invoice":
             doc_id = arguments["document_id"]
@@ -897,7 +1197,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }
             if revenue_center:
                 body_data["rc_center"] = revenue_center
-            body = {"data": body_data}
+            body = {"data": body_data, "options": {"fix_payments": True}}
 
             response = issued_api.create_issued_document(
                 company_id=COMPANY_ID, create_issued_document_request=body
@@ -1093,7 +1393,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }
             if revenue_center:
                 body_data["rc_center"] = revenue_center
-            body = {"data": body_data}
+            body = {"data": body_data, "options": {"fix_payments": True}}
             response = issued_api.create_issued_document(
                 company_id=COMPANY_ID, create_issued_document_request=body
             )

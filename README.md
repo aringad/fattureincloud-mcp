@@ -13,11 +13,11 @@ MCP server that connects Claude (Desktop, Code, or any MCP client) to **FattureI
 
 > ⚠️ **Unofficial integration.** Not affiliated with, endorsed by, or sponsored by TeamSystem S.p.A., owner of the FattureInCloud trademark. The trademark is used here for descriptive purposes only.
 
-## Features (23 tools)
+## Features (26 tools)
 
 | Tool | Description |
 |------|-------------|
-| `list_invoices` | List issued invoices / credit notes / proformas by year / month |
+| `list_invoices` | List issued invoices / credit notes / proformas by year / month (with payment status) |
 | `get_invoice` | Full document detail by ID |
 | `get_pdf_url` | PDF URL and web link for a document |
 | `list_clients` | List clients with optional filter |
@@ -40,8 +40,16 @@ MCP server that connects Claude (Desktop, Code, or any MCP client) to **FattureI
 | `list_cost_centers` | List configured cost / revenue centers |
 | `get_situation` | Yearly dashboard: net revenue, collected, outstanding, costs, margin |
 | `check_numeration` | Verify invoice numbering continuity |
+| `list_payment_accounts` | List the cash / bank accounts (payment accounts) |
+| `mark_payment_paid` | Mark a payment due as collected (date + payment account) |
+| `mark_payment_unpaid` | Revert a payment to not paid |
 
-> Marking payments as "paid" is intentionally not exposed: the FattureInCloud API requires a payment account that cannot be reliably retrieved through the SDK. Use the FattureInCloud web panel for that operation.
+> Marking payments works **also on documents already issued and sent to the SDI**: the API accepts a
+> change of the payment status (`payments_list`) without unlocking the document, so the web panel is
+> not required. `mark_payment_paid` takes the payment date and the cash account
+> (`payment_account_id`); when omitted it reuses the account already set on the payment, otherwise the
+> first available one — see `list_payment_accounts`. `mark_payment_unpaid` reverts it.
+> Both tools change real accounting data: always ask for confirmation.
 
 ## Installation
 

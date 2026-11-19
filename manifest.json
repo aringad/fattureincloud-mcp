@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "fattureincloud",
   "display_name": "FattureInCloud",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Manage your FattureInCloud account from Claude: invoices, e-invoicing (SDI), clients, cost / revenue centers, and supplier documents.",
   "long_description": "FattureInCloud is the leading Italian SaaS for electronic invoicing. Italy mandates B2B/B2C e-invoicing through the Sistema di Interscambio (SDI) — this community-built MCP server brings AI-assisted billing to that compliance-driven workflow. Read and write operations are supported across invoices, credit notes, proformas, received documents, clients, and cost / revenue centers, plus a yearly financial dashboard. API calls go directly from the user's machine to FattureInCloud's API; no data is routed through third-party servers. This is an unofficial integration. Not affiliated with, endorsed by, or sponsored by TeamSystem S.p.A., owner of the FattureInCloud trademark.",
   "author": {
@@ -90,7 +90,10 @@
     {"name": "check_numeration", "description": "Verify invoice numbering continuity for a given year. Reports gaps."},
     {"name": "list_cost_centers", "description": "List configured cost AND revenue centers (deduplicated union of the two FIC API endpoints, matching the 'Analisi centri c/r' view in FattureInCloud's UI). Validation on issued document mutations matches the input against revenue_centers only; validation on received document mutations matches against cost_centers only."},
     {"name": "get_received_document", "description": "Get full detail of a single received document by ID."},
-    {"name": "create_received_document", "description": "Create a received document (expense or received credit note) with supplier, amounts, optional category and description, and optional cost_center."}
+    {"name": "create_received_document", "description": "Create a received document (expense or received credit note) with supplier, amounts, optional category and description, and optional cost_center."},
+    {"name": "list_payment_accounts", "description": "List the cash / bank accounts (payment accounts) configured in FattureInCloud, with id, name and type."},
+    {"name": "mark_payment_paid", "description": "Mark a payment due as collected, with payment date and cash account. Works also on documents already issued and sent to the SDI."},
+    {"name": "mark_payment_unpaid", "description": "Revert a payment to not paid."}
   ],
 
   "compatibility": {
